@@ -31,6 +31,7 @@ export default function Home() {
 
   const handleSelectionComplete = useCallback((indices: number[]) => {
     setSelectedIndices(new Set(indices))
+    // 选择完成后自动退出套索模式
     setSelectionMode("orbit")
   }, [])
 
@@ -54,6 +55,8 @@ export default function Home() {
         })
 
         setPointCloud({ ...pointCloud, colors: newColors })
+        // 着色后清除选择，显示所有点（包括刚着色的点）
+        setSelectedIndices(new Set())
       }
     },
     [pointCloud, selectedIndices],
