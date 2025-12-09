@@ -34,15 +34,8 @@ export function LassoOverlay({ onPathUpdate, onComplete }: LassoOverlayProps) {
       ctx.lineTo(path[i].x, path[i].y)
     }
 
-    // Close the path
-    ctx.closePath()
-
-    // Fill with semi-transparent color
-    ctx.fillStyle = "rgba(59, 130, 246, 0.2)"
-    ctx.fill()
-
-    // Draw stroke
-    ctx.strokeStyle = "#3b82f6"
+    // Draw red dashed stroke (不闭合路径)
+    ctx.strokeStyle = "#ef4444"
     ctx.lineWidth = 2
     ctx.setLineDash([5, 5])
     ctx.stroke()
