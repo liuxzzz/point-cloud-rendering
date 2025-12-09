@@ -16,6 +16,7 @@ export default function Home() {
   const handleFileUpload = useCallback(async (file: File) => {
     setIsLoading(true)
     try {
+      // 将文件转换为 ArrayBuffer（二进制数据）
       const arrayBuffer = await file.arrayBuffer()
       const data = parsePCD(arrayBuffer)
       setPointCloud(data)

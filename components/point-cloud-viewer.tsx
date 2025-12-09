@@ -27,6 +27,7 @@ function PointCloudMesh({
     if (!pointsRef.current) return
 
     const geometry = pointsRef.current.geometry
+    // 将 pointCloud.positions 和 pointCloud.colors 转换为 Float32Array，是因为需要将数据传递给GPU进行高效处理。
     const positions = new Float32Array(pointCloud.positions)
     const colors = new Float32Array(pointCloud.colors)
 
@@ -37,12 +38,14 @@ function PointCloudMesh({
       colors[index * 3 + 2] = 0
     })
 
-    geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3))
-    geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3))
-    geometry.computeBoundingSphere()
+    // 将点云数据注入到 Three.js 几何体的核心步骤。Three.js 的 BufferAttribute 类负责管理 GPU 可直接访问的缓冲区数据。
+    geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3))  //位置数据
+    geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3))  //颜色数据
+    geometry.computeBoundingSphere() //设置边界球，用于相机定位和渲染优化
   }, [pointCloud, selectedIndices])
 
   return (
+    // 使用react-three-fiber 来代替传统Three.js的api，自动管理Three.js的实例生命周期，避免内存泄漏。
     <points ref={pointsRef}>
       <bufferGeometry />
       <pointsMaterial size={0.02} vertexColors sizeAttenuation />
