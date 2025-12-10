@@ -142,15 +142,24 @@ function SceneContent({
       const projectedPoints: { index: number; x: number; y: number }[] = []
       const positions = pointCloud.positions
       const vector = new THREE.Vector3()
+      
+      // 优化：缓存画布尺寸，避免重复访问 DOM
+      const canvasWidth = gl.domElement.clientWidth
+      const canvasHeight = gl.domElement.clientHeight
 
+      // 优化：批量处理，减少函数调用
       for (let i = 0; i < positions.length; i += 3) {
-        vector.set(positions[i], positions[i + 1], positions[i + 2])
+        const px = positions[i]
+        const py = positions[i + 1]
+        const pz = positions[i + 2]
+        
+        vector.set(px, py, pz)
         vector.project(camera)
 
-        const x = ((vector.x + 1) / 2) * gl.domElement.clientWidth
-        const y = ((-vector.y + 1) / 2) * gl.domElement.clientHeight
-
+        // 优化：只在可见时才创建对象
         if (vector.z < 1) {
+          const x = ((vector.x + 1) * 0.5) * canvasWidth
+          const y = ((-vector.y + 1) * 0.5) * canvasHeight
           projectedPoints.push({ index: i / 3, x, y })
         }
       }
@@ -195,13 +204,36 @@ export function PointCloudViewer({
       // 记录搜索开始时间
       const searchStartTime = performance.now()
       
-      // 优化：只在套索完成时才进行一次投影计算
+      // 优化1：计算套索的边界框（Bounding Box）用于快速筛选
+      let minX = Infinity, maxX = -Infinity
+      let minY = Infinity, maxY = -Infinity
+      for (let i = 0; i < path.length; i++) {
+        const p = path[i]
+        if (p.x < minX) minX = p.x
+        if (p.x > maxX) maxX = p.x
+        if (p.y < minY) minY = p.y
+        if (p.y > maxY) maxY = p.y
+      }
+      
+      // 优化2：使用优化的投影计算（直接操作 TypedArray，减少对象创建）
       const projectedPoints = computeProjectionRef.current ? computeProjectionRef.current() : []
       
       // Find points inside the lasso polygon
       const selectedPoints: number[] = []
+      let insideBBoxCount = 0
+      let totalChecked = 0
       
       for (const point of projectedPoints) {
+        totalChecked++
+        
+        // 优化3：边界框快速筛选（只需4次比较，vs 150+次多边形判断）
+        if (point.x < minX || point.x > maxX || point.y < minY || point.y > maxY) {
+          continue // 明显在边界框外，直接跳过
+        }
+        
+        insideBBoxCount++
+        
+        // 优化4：只对边界框内的点做精确的多边形判断
         if (isPointInPolygon(point, path)) {
           selectedPoints.push(point.index)
         }
@@ -235,9 +267,12 @@ export function PointCloudViewer({
   )
 }
 
+// 优化的 Ray-Casting 算法：减少对象属性访问
 function isPointInPolygon(point: { x: number; y: number }, polygon: LassoPoint[]): boolean {
   let inside = false
   const n = polygon.length
+  const px = point.x
+  const py = point.y
 
   for (let i = 0, j = n - 1; i < n; j = i++) {
     const xi = polygon[i].x
@@ -245,7 +280,8 @@ function isPointInPolygon(point: { x: number; y: number }, polygon: LassoPoint[]
     const xj = polygon[j].x
     const yj = polygon[j].y
 
-    if (yi > point.y !== yj > point.y && point.x < ((xj - xi) * (point.y - yi)) / (yj - yi) + xi) {
+    // 优化：减少属性访问，使用局部变量
+    if (yi > py !== yj > py && px < ((xj - xi) * (py - yi)) / (yj - yi) + xi) {
       inside = !inside
     }
   }
