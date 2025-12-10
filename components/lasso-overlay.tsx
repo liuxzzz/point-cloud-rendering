@@ -8,9 +8,10 @@ import type { LassoPoint } from "@/lib/types"
 interface LassoOverlayProps {
   onPathUpdate: (path: LassoPoint[]) => void
   onComplete: (path: LassoPoint[]) => void
+  onStart: () => void
 }
 
-export function LassoOverlay({ onPathUpdate, onComplete }: LassoOverlayProps) {
+export function LassoOverlay({ onPathUpdate, onComplete, onStart }: LassoOverlayProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const [isDrawing, setIsDrawing] = useState(false)
   const pathRef = useRef<LassoPoint[]>([])
@@ -44,10 +45,11 @@ export function LassoOverlay({ onPathUpdate, onComplete }: LassoOverlayProps) {
   const handleMouseDown = useCallback(
     (e: React.MouseEvent) => {
       setIsDrawing(true)
+      onStart()
       pathRef.current = [{ x: e.nativeEvent.offsetX, y: e.nativeEvent.offsetY }]
       onPathUpdate(pathRef.current)
     },
-    [onPathUpdate],
+    [onPathUpdate, onStart],
   )
 
   const handleMouseMove = useCallback(

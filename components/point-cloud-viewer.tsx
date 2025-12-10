@@ -11,7 +11,7 @@ interface PointCloudViewerProps {
   pointCloud: PointCloudData
   selectionMode: SelectionMode
   selectedIndices: Set<number>
-  onSelectionComplete: (indices: number[]) => void
+  onSelectionComplete: (indices: number[], startTime: number) => void
 }
 
 function PointCloudMesh({
@@ -177,9 +177,14 @@ export function PointCloudViewer({
 }: PointCloudViewerProps) {
   const [lassoPath, setLassoPath] = useState<LassoPoint[]>([])
   const projectedPointsRef = useRef<{ index: number; x: number; y: number }[]>([])
+  const selectionStartTimeRef = useRef<number>(0)
 
   const handleProjectedPoints = useCallback((points: { index: number; x: number; y: number }[]) => {
     projectedPointsRef.current = points
+  }, [])
+
+  const handleLassoStart = useCallback(() => {
+    selectionStartTimeRef.current = performance.now()
   }, [])
 
   const handleLassoComplete = useCallback(
@@ -198,7 +203,7 @@ export function PointCloudViewer({
         }
       }
 
-      onSelectionComplete(selectedPoints)
+      onSelectionComplete(selectedPoints, selectionStartTimeRef.current)
       setLassoPath([])
     },
     [onSelectionComplete],
@@ -216,7 +221,9 @@ export function PointCloudViewer({
         />
       </Canvas>
 
-      {selectionMode === "lasso" && <LassoOverlay onPathUpdate={setLassoPath} onComplete={handleLassoComplete} />}
+      {selectionMode === "lasso" && (
+        <LassoOverlay onPathUpdate={setLassoPath} onComplete={handleLassoComplete} onStart={handleLassoStart} />
+      )}
     </div>
   )
 }
