@@ -91,8 +91,8 @@ export class ParallelPointWorkerClient {
   private pointCount = 0
 
   constructor(workerCount?: number) {
-    // 默认使用 CPU 核心数，但最少 2 个，最多 8 个
-    this.workerCount = workerCount ?? Math.min(Math.max(navigator.hardwareConcurrency || 4, 2), 8)
+    // 默认使用 CPU 核心数，但最少 2 个，最多 12 个
+    this.workerCount = workerCount ?? Math.min(Math.max(navigator.hardwareConcurrency || 4, 2), 12)
     
     for (let i = 0; i < this.workerCount; i++) {
       this.workers.push(new SingleWorker())
