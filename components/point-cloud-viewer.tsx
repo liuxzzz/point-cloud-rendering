@@ -11,7 +11,7 @@ interface PointCloudViewerProps {
   pointCloud: PointCloudData
   selectionMode: SelectionMode
   selectedIndices: Set<number>
-  onSelectionComplete: (indices: number[], startTime: number) => void
+  onSelectionComplete: (indices: number[], searchTime: number) => void
 }
 
 function PointCloudMesh({
@@ -177,14 +177,9 @@ export function PointCloudViewer({
 }: PointCloudViewerProps) {
   const [lassoPath, setLassoPath] = useState<LassoPoint[]>([])
   const projectedPointsRef = useRef<{ index: number; x: number; y: number }[]>([])
-  const selectionStartTimeRef = useRef<number>(0)
 
   const handleProjectedPoints = useCallback((points: { index: number; x: number; y: number }[]) => {
     projectedPointsRef.current = points
-  }, [])
-
-  const handleLassoStart = useCallback(() => {
-    selectionStartTimeRef.current = performance.now()
   }, [])
 
   const handleLassoComplete = useCallback(
@@ -193,17 +188,24 @@ export function PointCloudViewer({
         setLassoPath([])
         return
       }
-
+      
+      // 记录搜索开始时间（从这里开始才是真正的搜索）
+      const searchStartTime = performance.now()
+      
       // Find points inside the lasso polygon
       const selectedPoints: number[] = []
-
+      
       for (const point of projectedPointsRef.current) {
         if (isPointInPolygon(point, path)) {
           selectedPoints.push(point.index)
         }
       }
+      
+      // 记录搜索结束时间并计算搜索耗时
+      const searchEndTime = performance.now()
+      const searchTime = searchEndTime - searchStartTime
 
-      onSelectionComplete(selectedPoints, selectionStartTimeRef.current)
+      onSelectionComplete(selectedPoints, searchTime)
       setLassoPath([])
     },
     [onSelectionComplete],
@@ -222,7 +224,7 @@ export function PointCloudViewer({
       </Canvas>
 
       {selectionMode === "lasso" && (
-        <LassoOverlay onPathUpdate={setLassoPath} onComplete={handleLassoComplete} onStart={handleLassoStart} />
+        <LassoOverlay onPathUpdate={setLassoPath} onComplete={handleLassoComplete} />
       )}
     </div>
   )

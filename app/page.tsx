@@ -12,9 +12,8 @@ export default function Home() {
   const [selectionMode, setSelectionMode] = useState<SelectionMode>("orbit")
   const [selectedIndices, setSelectedIndices] = useState<Set<number>>(new Set())
   const [isLoading, setIsLoading] = useState(false)
-  const [lastSelectionTime, setLastSelectionTime] = useState<number>(0)
+  const [lastSearchTime, setLastSearchTime] = useState<number>(0)
   const [lastColoringTime, setLastColoringTime] = useState<number>(0)
-  const [selectionStartTime, setSelectionStartTime] = useState<number>(0)
 
   const handleFileUpload = useCallback(async (file: File) => {
     setIsLoading(true)
@@ -32,10 +31,8 @@ export default function Home() {
     }
   }, [])
 
-  const handleSelectionComplete = useCallback((indices: number[], startTime: number) => {
-    const endTime = performance.now()
-    const selectionTime = endTime - startTime
-    setLastSelectionTime(selectionTime)
+  const handleSelectionComplete = useCallback((indices: number[], searchTime: number) => {
+    setLastSearchTime(searchTime)
     setSelectedIndices(new Set(indices))
     // 选择完成后自动退出套索模式
     setSelectionMode("orbit")
@@ -44,7 +41,7 @@ export default function Home() {
   const handleClearSelection = useCallback(() => {
     setSelectedIndices(new Set())
     // 清除时间统计，还原到初始状态
-    setLastSelectionTime(0)
+    setLastSearchTime(0)
     setLastColoringTime(0)
     // 切换回orbit模式
     setSelectionMode("orbit")
@@ -135,15 +132,15 @@ export default function Home() {
           <div className="flex items-center gap-6 text-sm text-muted-foreground">
             <span>Points: {pointCloud.count.toLocaleString()}</span>
             <span>Selected: {selectedIndices.size.toLocaleString()}</span>
-            {lastSelectionTime > 0 && (
-              <span>套索选择耗时: {lastSelectionTime.toFixed(2)} ms</span>
+            {lastSearchTime > 0 && (
+              <span>搜索耗时: {lastSearchTime.toFixed(2)} ms</span>
             )}
             {lastColoringTime > 0 && (
               <span>上色耗时: {lastColoringTime.toFixed(2)} ms</span>
             )}
-            {lastSelectionTime > 0 && lastColoringTime > 0 && (
+            {lastSearchTime > 0 && lastColoringTime > 0 && (
               <span className="font-semibold text-foreground">
-                总耗时: {(lastSelectionTime + lastColoringTime).toFixed(2)} ms
+                总耗时: {(lastSearchTime + lastColoringTime).toFixed(2)} ms
               </span>
             )}
           </div>
