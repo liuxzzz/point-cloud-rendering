@@ -1,6 +1,6 @@
 export interface PointCloudData {
-  positions: number[]
-  colors: number[]
+  positions: Float32Array
+  colors: Float32Array
   count: number
 }
 

@@ -1,11 +1,12 @@
 "use client"
 
-import { useState, useCallback } from "react"
+import { useState, useCallback, useEffect, useRef } from "react"
 import { PointCloudViewer } from "@/components/point-cloud-viewer"
 import { FileUploader } from "@/components/file-uploader"
 import { Toolbar } from "@/components/toolbar"
 import { parsePCD } from "@/lib/pcd-parser"
 import type { PointCloudData, SelectionMode } from "@/lib/types"
+import { PointWorkerClient } from "@/lib/point-worker-client"
 
 export default function Home() {
   const [pointCloud, setPointCloud] = useState<PointCloudData | null>(null)
@@ -14,6 +15,18 @@ export default function Home() {
   const [isLoading, setIsLoading] = useState(false)
   const [lastSearchTime, setLastSearchTime] = useState<number>(0)
   const [lastColoringTime, setLastColoringTime] = useState<number>(0)
+  const workerRef = useRef<PointWorkerClient | null>(null)
+
+  // 初始化并保持单例 Worker
+  useEffect(() => {
+    const worker = new PointWorkerClient()
+    workerRef.current = worker
+
+    return () => {
+      worker.terminate()
+      workerRef.current = null
+    }
+  }, [])
 
   const handleFileUpload = useCallback(async (file: File) => {
     setIsLoading(true)
@@ -23,6 +36,10 @@ export default function Home() {
       const data = parsePCD(arrayBuffer)
       setPointCloud(data)
       setSelectedIndices(new Set())
+      // 同步数据到 Worker
+      workerRef.current?.init(data).catch((err) => {
+        console.error("初始化 Worker 失败", err)
+      })
     } catch (error) {
       console.error("Failed to parse PCD file:", error)
       alert("Failed to parse PCD file. Please ensure it's a valid PCD format.")
@@ -48,40 +65,33 @@ export default function Home() {
   }, [])
 
   const handleColorSelection = useCallback(
-    (color: string) => {
-      if (pointCloud && selectedIndices.size > 0) {
-        const startTime = performance.now()
-        
-        // 🚀 激进优化：直接修改原数组，不复制（零拷贝）
-        const colors = pointCloud.colors
-        
-        const hex = color.replace("#", "")
-        const r = Number.parseInt(hex.substring(0, 2), 16) / 255
-        const g = Number.parseInt(hex.substring(2, 4), 16) / 255
-        const b = Number.parseInt(hex.substring(4, 6), 16) / 255
+    async (color: string) => {
+      if (!pointCloud || selectedIndices.size === 0 || !workerRef.current) return
 
-        // 优化：批量修改，直接写入原数组
-        selectedIndices.forEach((index) => {
-          const i = index * 3
-          colors[i] = r
-          colors[i + 1] = g
-          colors[i + 2] = b
+      const hex = color.replace("#", "")
+      const r = Number.parseInt(hex.substring(0, 2), 16) / 255
+      const g = Number.parseInt(hex.substring(2, 4), 16) / 255
+      const b = Number.parseInt(hex.substring(4, 6), 16) / 255
+
+      const indicesArray = new Uint32Array(selectedIndices.size)
+      let offset = 0
+      selectedIndices.forEach((index) => {
+        indicesArray[offset++] = index
+      })
+
+      try {
+        const { colors, coloringTime } = await workerRef.current.color({
+          indices: indicesArray,
+          color: [r, g, b],
         })
 
-        // 触发渲染更新（通过改变引用）
-        // 创建一个新的 pointCloud 对象，但颜色数组是同一个引用
-        setPointCloud({ ...pointCloud, colors: colors })
-        
-        const endTime = performance.now()
-        const coloringTime = endTime - startTime
+        setPointCloud({ ...pointCloud, colors })
         setLastColoringTime(coloringTime)
-        
-        console.log(`🎨 上色统计:
-  选中点数: ${selectedIndices.size.toLocaleString()}
-  上色耗时: ${coloringTime.toFixed(0)}ms`)
-        
-        // 着色后清除选择，显示所有点（包括刚着色的点）
         setSelectedIndices(new Set())
+
+
+      } catch (error) {
+        console.error("Worker 上色失败", error)
       }
     },
     [pointCloud, selectedIndices],
@@ -133,6 +143,7 @@ export default function Home() {
             selectionMode={selectionMode}
             selectedIndices={selectedIndices}
             onSelectionComplete={handleSelectionComplete}
+            workerClient={workerRef.current}
           />
         )}
       </div>

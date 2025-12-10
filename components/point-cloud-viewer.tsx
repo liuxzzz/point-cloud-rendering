@@ -1,17 +1,19 @@
 "use client"
 
 import { useRef, useEffect, useState, useCallback } from "react"
-import { Canvas, useThree, useFrame } from "@react-three/fiber"
+import { Canvas, useThree } from "@react-three/fiber"
 import { OrbitControls } from "@react-three/drei"
 import * as THREE from "three"
 import type { PointCloudData, SelectionMode, LassoPoint } from "@/lib/types"
 import { LassoOverlay } from "./lasso-overlay"
+import { PointWorkerClient } from "@/lib/point-worker-client"
 
 interface PointCloudViewerProps {
   pointCloud: PointCloudData
   selectionMode: SelectionMode
   selectedIndices: Set<number>
   onSelectionComplete: (indices: number[], searchTime: number) => void
+  workerClient?: PointWorkerClient | null
 }
 
 function PointCloudMesh({
@@ -57,10 +59,17 @@ function PointCloudMesh({
       const positionAttr = geometry.getAttribute("position")
       const colorAttr = geometry.getAttribute("color")
       
-      if (!positionAttr || positionAttr.count !== pointCloud.positions.length / 3) {
-        // 首次创建或大小改变
-        geometry.setAttribute("position", new THREE.BufferAttribute(new Float32Array(pointCloud.positions), 3))
-        geometry.setAttribute("color", new THREE.BufferAttribute(new Float32Array(pointCloud.colors), 3))
+      if (
+        !positionAttr ||
+        !colorAttr ||
+        positionAttr.count !== pointCloud.positions.length / 3 ||
+        colorAttr.count !== pointCloud.colors.length / 3 ||
+        positionAttr.array !== pointCloud.positions ||
+        colorAttr.array !== pointCloud.colors
+      ) {
+        // 首次创建或大小改变 / 数据引用变化
+        geometry.setAttribute("position", new THREE.BufferAttribute(pointCloud.positions, 3))
+        geometry.setAttribute("color", new THREE.BufferAttribute(pointCloud.colors, 3))
       } else {
         // 🚀 直接更新现有 BufferAttribute，避免重新创建
         const positions = positionAttr.array as Float32Array
@@ -148,44 +157,30 @@ function SceneContent({
   pointCloud: PointCloudData
   selectionMode: SelectionMode
   selectedIndices: Set<number>
-  onComputeProjection: (compute: () => { index: number; x: number; y: number }[]) => void
+  onComputeProjection: (
+    compute: () => {
+      viewProjectionMatrix: Float32Array
+      viewport: { width: number; height: number }
+    },
+  ) => void
 }) {
   const { camera, gl } = useThree()
 
-  // 优化：不再在 useFrame 中每帧计算投影，而是提供一个计算函数
-  // 这样只在需要时（套索完成时）才进行一次投影计算
+  // 将相机矩阵与视口信息提供给主线程，供 Worker 投影使用
   useEffect(() => {
-    const computeProjection = () => {
-      const projectedPoints: { index: number; x: number; y: number }[] = []
-      const positions = pointCloud.positions
-      const vector = new THREE.Vector3()
-      
-      // 优化：缓存画布尺寸，避免重复访问 DOM
-      const canvasWidth = gl.domElement.clientWidth
-      const canvasHeight = gl.domElement.clientHeight
-
-      // 优化：批量处理，减少函数调用
-      for (let i = 0; i < positions.length; i += 3) {
-        const px = positions[i]
-        const py = positions[i + 1]
-        const pz = positions[i + 2]
-        
-        vector.set(px, py, pz)
-        vector.project(camera)
-
-        // 优化：只在可见时才创建对象
-        if (vector.z < 1) {
-          const x = ((vector.x + 1) * 0.5) * canvasWidth
-          const y = ((-vector.y + 1) * 0.5) * canvasHeight
-          projectedPoints.push({ index: i / 3, x, y })
-        }
+    const compute = () => {
+      const viewProjection = new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse)
+      return {
+        viewProjectionMatrix: new Float32Array(viewProjection.elements),
+        viewport: {
+          width: gl.domElement.clientWidth,
+          height: gl.domElement.clientHeight,
+        },
       }
-
-      return projectedPoints
     }
 
-    onComputeProjection(computeProjection)
-  }, [pointCloud, camera, gl, onComputeProjection])
+    onComputeProjection(compute)
+  }, [camera, gl, onComputeProjection])
 
   return (
     <>
@@ -202,68 +197,48 @@ export function PointCloudViewer({
   selectionMode,
   selectedIndices,
   onSelectionComplete,
+  workerClient,
 }: PointCloudViewerProps) {
   const [lassoPath, setLassoPath] = useState<LassoPoint[]>([])
-  // 优化：存储计算函数而不是投影结果，避免每帧存储 600MB 数据
-  const computeProjectionRef = useRef<(() => { index: number; x: number; y: number }[]) | null>(null)
+  // 存储相机矩阵/视口计算函数，在套索完成时交由 Worker 使用
+  const computeProjectionRef = useRef<
+    (() => { viewProjectionMatrix: Float32Array; viewport: { width: number; height: number } }) | null
+  >(null)
 
-  const handleComputeProjection = useCallback((compute: () => { index: number; x: number; y: number }[]) => {
-    computeProjectionRef.current = compute
-  }, [])
+  const handleComputeProjection = useCallback(
+    (compute: () => { viewProjectionMatrix: Float32Array; viewport: { width: number; height: number } }) => {
+      computeProjectionRef.current = compute
+    },
+    [],
+  )
 
   const handleLassoComplete = useCallback(
-    (path: LassoPoint[]) => {
+    async (path: LassoPoint[]) => {
+      setLassoPath([])
+
       if (path.length < 3) {
-        setLassoPath([])
         return
       }
       
-      // 记录搜索开始时间
-      const searchStartTime = performance.now()
-      
-      // 优化1：计算套索的边界框（Bounding Box）用于快速筛选
-      let minX = Infinity, maxX = -Infinity
-      let minY = Infinity, maxY = -Infinity
-      for (let i = 0; i < path.length; i++) {
-        const p = path[i]
-        if (p.x < minX) minX = p.x
-        if (p.x > maxX) maxX = p.x
-        if (p.y < minY) minY = p.y
-        if (p.y > maxY) maxY = p.y
+      const cameraInfo = computeProjectionRef.current ? computeProjectionRef.current() : null
+      if (!cameraInfo || !workerClient) {
+        console.warn("Worker 未准备好，跳过选点计算")
+        return
       }
-      
-      // 优化2：使用优化的投影计算（直接操作 TypedArray，减少对象创建）
-      const projectedPoints = computeProjectionRef.current ? computeProjectionRef.current() : []
-      
-      // Find points inside the lasso polygon
-      const selectedPoints: number[] = []
-      let insideBBoxCount = 0
-      let totalChecked = 0
-      
-      for (const point of projectedPoints) {
-        totalChecked++
-        
-        // 优化3：边界框快速筛选（只需4次比较，vs 150+次多边形判断）
-        if (point.x < minX || point.x > maxX || point.y < minY || point.y > maxY) {
-          continue // 明显在边界框外，直接跳过
-        }
-        
-        insideBBoxCount++
-        
-        // 优化4：只对边界框内的点做精确的多边形判断
-        if (isPointInPolygon(point, path)) {
-          selectedPoints.push(point.index)
-        }
-      }
-      
-      // 记录搜索结束时间并计算搜索耗时
-      const searchEndTime = performance.now()
-      const searchTime = searchEndTime - searchStartTime
 
-      onSelectionComplete(selectedPoints, searchTime)
-      setLassoPath([])
+      try {
+        const { indices, searchTime } = await workerClient.select({
+          path,
+          viewProjectionMatrix: cameraInfo.viewProjectionMatrix,
+          viewport: cameraInfo.viewport,
+        })
+
+        onSelectionComplete(Array.from(indices), searchTime)
+      } catch (error) {
+        console.error("套索选点 Worker 计算失败", error)
+      }
     },
-    [onSelectionComplete],
+    [onSelectionComplete, workerClient],
   )
 
   return (
@@ -284,24 +259,3 @@ export function PointCloudViewer({
   )
 }
 
-// 优化的 Ray-Casting 算法：减少对象属性访问
-function isPointInPolygon(point: { x: number; y: number }, polygon: LassoPoint[]): boolean {
-  let inside = false
-  const n = polygon.length
-  const px = point.x
-  const py = point.y
-
-  for (let i = 0, j = n - 1; i < n; j = i++) {
-    const xi = polygon[i].x
-    const yi = polygon[i].y
-    const xj = polygon[j].x
-    const yj = polygon[j].y
-
-    // 优化：减少属性访问，使用局部变量
-    if (yi > py !== yj > py && px < ((xj - xi) * (py - yi)) / (yj - yi) + xi) {
-      inside = !inside
-    }
-  }
-
-  return inside
-}

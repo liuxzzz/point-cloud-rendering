@@ -207,8 +207,8 @@ export function parsePCD(arrayBuffer: ArrayBuffer): PointCloudData {
   // 4. 返回标准化的点云数据格式
   // 这种格式可以直接用于 Three.js 的 BufferGeometry
   return {
-    positions, // 扁平化的坐标数组：[x1, y1, z1, x2, y2, z2, ...]
-    colors,    // 扁平化的颜色数组：[r1, g1, b1, r2, g2, b2, ...]，值范围 0-1
+    positions: new Float32Array(positions), // 扁平化的坐标数组：[x1, y1, z1, x2, y2, z2, ...]
+    colors: new Float32Array(colors),    // 扁平化的颜色数组：[r1, g1, b1, r2, g2, b2, ...]，值范围 0-1
     count: positions.length / 3, // 点的数量
   }
 }
