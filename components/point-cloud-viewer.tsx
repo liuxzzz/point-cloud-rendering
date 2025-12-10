@@ -6,14 +6,14 @@ import { OrbitControls } from "@react-three/drei"
 import * as THREE from "three"
 import type { PointCloudData, SelectionMode, LassoPoint } from "@/lib/types"
 import { LassoOverlay } from "./lasso-overlay"
-import { PointWorkerClient } from "@/lib/point-worker-client"
+import { ParallelPointWorkerClient } from "@/lib/parallel-point-worker-client"
 
 interface PointCloudViewerProps {
   pointCloud: PointCloudData
   selectionMode: SelectionMode
   selectedIndices: Set<number>
   onSelectionComplete: (indices: number[], searchTime: number) => void
-  workerClient?: PointWorkerClient | null
+  workerClient?: ParallelPointWorkerClient | null
 }
 
 function PointCloudMesh({

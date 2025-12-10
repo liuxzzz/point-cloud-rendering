@@ -15,6 +15,9 @@ type SelectMessage = {
     path: LassoPoint[]
     viewProjectionMatrix: Float32Array
     viewport: Viewport
+    // 可选的范围参数，用于并行处理
+    startIndex?: number
+    endIndex?: number
   }
 }
 
@@ -113,6 +116,8 @@ function handleSelect({
   path,
   viewProjectionMatrix,
   viewport,
+  startIndex,
+  endIndex,
 }: SelectMessage["payload"]): { indices: Uint32Array; searchTime: number } {
   if (!positions) {
     throw new Error("Point data is not initialized")
@@ -124,6 +129,10 @@ function handleSelect({
   if (path.length < 3 || viewport.width === 0 || viewport.height === 0 || viewProjectionMatrix.length !== 16) {
     return { indices: new Uint32Array(), searchTime: performance.now() - start }
   }
+
+  // 确定处理范围（支持并行分片）
+  const rangeStart = startIndex ?? 0
+  const rangeEnd = endIndex ?? pointCount
 
   // 预处理套索路径：拆分为两个连续数组，减少属性访问
   const pathLength = path.length
@@ -146,7 +155,11 @@ function handleSelect({
     if (y > maxY) maxY = y
   }
 
-  const selected: number[] = []
+  // 🚀 预分配数组，避免动态扩容
+  const rangeSize = rangeEnd - rangeStart
+  const selectedBuffer = new Uint32Array(rangeSize)
+  let selectedCount = 0
+
   const e = viewProjectionMatrix
   const width = viewport.width
   const height = viewport.height
@@ -169,7 +182,8 @@ function handleSelect({
     m32 = e[14],
     m33 = e[15]
 
-  for (let i = 0; i < pointCount; i++) {
+  // 🚀 只处理指定范围的点
+  for (let i = rangeStart; i < rangeEnd; i++) {
     const idx = i * 3
     const x = positions[idx]
     const y = positions[idx + 1]
@@ -198,13 +212,14 @@ function handleSelect({
     if (screenX < minX || screenX > maxX || screenY < minY || screenY > maxY) continue
 
     if (isPointInPolygon(screenX, screenY, pathXs, pathYs)) {
-      selected.push(i)
+      selectedBuffer[selectedCount++] = i
     }
   }
 
-  const indices = new Uint32Array(selected)
+  // 🚀 返回实际大小的数组
+  const indices = selectedBuffer.subarray(0, selectedCount)
   const searchTime = performance.now() - start
-  return { indices, searchTime }
+  return { indices: new Uint32Array(indices), searchTime }
 }
 
 function handleColor({ indices, color }: ColorMessage["payload"]): { colors: ArrayBuffer; coloringTime: number } {

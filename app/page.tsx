@@ -6,7 +6,7 @@ import { FileUploader } from "@/components/file-uploader"
 import { Toolbar } from "@/components/toolbar"
 import { parsePCD } from "@/lib/pcd-parser"
 import type { PointCloudData, SelectionMode } from "@/lib/types"
-import { PointWorkerClient } from "@/lib/point-worker-client"
+import { ParallelPointWorkerClient } from "@/lib/parallel-point-worker-client"
 
 export default function Home() {
   const [pointCloud, setPointCloud] = useState<PointCloudData | null>(null)
@@ -15,12 +15,14 @@ export default function Home() {
   const [isLoading, setIsLoading] = useState(false)
   const [lastSearchTime, setLastSearchTime] = useState<number>(0)
   const [lastColoringTime, setLastColoringTime] = useState<number>(0)
-  const workerRef = useRef<PointWorkerClient | null>(null)
+  const [workerCount, setWorkerCount] = useState<number>(0)
+  const workerRef = useRef<ParallelPointWorkerClient | null>(null)
 
-  // 初始化并保持单例 Worker
+  // 初始化并保持 Worker 池
   useEffect(() => {
-    const worker = new PointWorkerClient()
+    const worker = new ParallelPointWorkerClient()
     workerRef.current = worker
+    setWorkerCount(worker.getWorkerCount())
 
     return () => {
       worker.terminate()
@@ -150,6 +152,7 @@ export default function Home() {
           <div className="flex items-center gap-6 text-sm text-muted-foreground">
             <span>Points: {pointCloud.count.toLocaleString()}</span>
             <span>Selected: {selectedIndices.size.toLocaleString()}</span>
+            <span>Workers: {workerCount}</span>
             {lastSearchTime > 0 && (
               <span>搜索耗时: {lastSearchTime.toFixed(2)} ms</span>
             )}
