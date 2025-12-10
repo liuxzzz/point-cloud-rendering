@@ -52,23 +52,33 @@ export default function Home() {
       if (pointCloud && selectedIndices.size > 0) {
         const startTime = performance.now()
         
-        const newColors = [...pointCloud.colors]
+        // 🚀 激进优化：直接修改原数组，不复制（零拷贝）
+        const colors = pointCloud.colors
+        
         const hex = color.replace("#", "")
         const r = Number.parseInt(hex.substring(0, 2), 16) / 255
         const g = Number.parseInt(hex.substring(2, 4), 16) / 255
         const b = Number.parseInt(hex.substring(4, 6), 16) / 255
 
+        // 优化：批量修改，直接写入原数组
         selectedIndices.forEach((index) => {
-          newColors[index * 3] = r
-          newColors[index * 3 + 1] = g
-          newColors[index * 3 + 2] = b
+          const i = index * 3
+          colors[i] = r
+          colors[i + 1] = g
+          colors[i + 2] = b
         })
 
-        setPointCloud({ ...pointCloud, colors: newColors })
+        // 触发渲染更新（通过改变引用）
+        // 创建一个新的 pointCloud 对象，但颜色数组是同一个引用
+        setPointCloud({ ...pointCloud, colors: colors })
         
         const endTime = performance.now()
         const coloringTime = endTime - startTime
         setLastColoringTime(coloringTime)
+        
+        console.log(`🎨 上色统计:
+  选中点数: ${selectedIndices.size.toLocaleString()}
+  上色耗时: ${coloringTime.toFixed(0)}ms`)
         
         // 着色后清除选择，显示所有点（包括刚着色的点）
         setSelectedIndices(new Set())

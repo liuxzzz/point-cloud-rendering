@@ -34,17 +34,18 @@ function PointCloudMesh({
       const selectedColors: number[] = []
       
       selectedIndices.forEach((index) => {
+        const i = index * 3
         // 获取该点的位置
         selectedPositions.push(
-          pointCloud.positions[index * 3],
-          pointCloud.positions[index * 3 + 1],
-          pointCloud.positions[index * 3 + 2]
+          pointCloud.positions[i],
+          pointCloud.positions[i + 1],
+          pointCloud.positions[i + 2]
         )
         // 获取该点的颜色
         selectedColors.push(
-          pointCloud.colors[index * 3],
-          pointCloud.colors[index * 3 + 1],
-          pointCloud.colors[index * 3 + 2]
+          pointCloud.colors[i],
+          pointCloud.colors[i + 1],
+          pointCloud.colors[i + 2]
         )
       })
       
@@ -52,11 +53,27 @@ function PointCloudMesh({
       geometry.setAttribute("color", new THREE.BufferAttribute(new Float32Array(selectedColors), 3))
     } else {
       // 没有选中时，渲染所有点
-      const positions = new Float32Array(pointCloud.positions)
-      const colors = new Float32Array(pointCloud.colors)
+      // 🚀 优化：直接使用原数组，不创建新的 TypedArray
+      const positionAttr = geometry.getAttribute("position")
+      const colorAttr = geometry.getAttribute("color")
       
-      geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3))
-      geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3))
+      if (!positionAttr || positionAttr.count !== pointCloud.positions.length / 3) {
+        // 首次创建或大小改变
+        geometry.setAttribute("position", new THREE.BufferAttribute(new Float32Array(pointCloud.positions), 3))
+        geometry.setAttribute("color", new THREE.BufferAttribute(new Float32Array(pointCloud.colors), 3))
+      } else {
+        // 🚀 直接更新现有 BufferAttribute，避免重新创建
+        const positions = positionAttr.array as Float32Array
+        const colors = colorAttr.array as Float32Array
+        
+        // 复制数据到现有 buffer
+        positions.set(pointCloud.positions)
+        colors.set(pointCloud.colors)
+        
+        // 标记需要更新
+        positionAttr.needsUpdate = true
+        colorAttr.needsUpdate = true
+      }
     }
     
     geometry.computeBoundingSphere() //设置边界球，用于相机定位和渲染优化
