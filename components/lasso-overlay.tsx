@@ -55,7 +55,8 @@ export function LassoOverlay({ onPathUpdate, onComplete }: LassoOverlayProps) {
       if (!isDrawing) return
 
       const newPoint = { x: e.nativeEvent.offsetX, y: e.nativeEvent.offsetY }
-      pathRef.current = [...pathRef.current, newPoint]
+      // 优化：直接 push 而不是创建新数组，避免每次 mousemove 都分配新内存
+      pathRef.current.push(newPoint)
       onPathUpdate(pathRef.current)
       draw()
     },

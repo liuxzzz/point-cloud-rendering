@@ -126,38 +126,40 @@ function SceneContent({
   pointCloud,
   selectionMode,
   selectedIndices,
-  lassoPath,
-  onProjectedPoints,
+  onComputeProjection,
 }: {
   pointCloud: PointCloudData
   selectionMode: SelectionMode
   selectedIndices: Set<number>
-  lassoPath: LassoPoint[]
-  onProjectedPoints: (points: { index: number; x: number; y: number }[]) => void
+  onComputeProjection: (compute: () => { index: number; x: number; y: number }[]) => void
 }) {
   const { camera, gl } = useThree()
 
-  useFrame(() => {
-    if (selectionMode !== "lasso" || lassoPath.length === 0) return
+  // 优化：不再在 useFrame 中每帧计算投影，而是提供一个计算函数
+  // 这样只在需要时（套索完成时）才进行一次投影计算
+  useEffect(() => {
+    const computeProjection = () => {
+      const projectedPoints: { index: number; x: number; y: number }[] = []
+      const positions = pointCloud.positions
+      const vector = new THREE.Vector3()
 
-    const projectedPoints: { index: number; x: number; y: number }[] = []
-    const positions = pointCloud.positions
-    const vector = new THREE.Vector3()
+      for (let i = 0; i < positions.length; i += 3) {
+        vector.set(positions[i], positions[i + 1], positions[i + 2])
+        vector.project(camera)
 
-    for (let i = 0; i < positions.length; i += 3) {
-      vector.set(positions[i], positions[i + 1], positions[i + 2])
-      vector.project(camera)
+        const x = ((vector.x + 1) / 2) * gl.domElement.clientWidth
+        const y = ((-vector.y + 1) / 2) * gl.domElement.clientHeight
 
-      const x = ((vector.x + 1) / 2) * gl.domElement.clientWidth
-      const y = ((-vector.y + 1) / 2) * gl.domElement.clientHeight
-
-      if (vector.z < 1) {
-        projectedPoints.push({ index: i / 3, x, y })
+        if (vector.z < 1) {
+          projectedPoints.push({ index: i / 3, x, y })
+        }
       }
+
+      return projectedPoints
     }
 
-    onProjectedPoints(projectedPoints)
-  })
+    onComputeProjection(computeProjection)
+  }, [pointCloud, camera, gl, onComputeProjection])
 
   return (
     <>
@@ -176,10 +178,11 @@ export function PointCloudViewer({
   onSelectionComplete,
 }: PointCloudViewerProps) {
   const [lassoPath, setLassoPath] = useState<LassoPoint[]>([])
-  const projectedPointsRef = useRef<{ index: number; x: number; y: number }[]>([])
+  // 优化：存储计算函数而不是投影结果，避免每帧存储 600MB 数据
+  const computeProjectionRef = useRef<(() => { index: number; x: number; y: number }[]) | null>(null)
 
-  const handleProjectedPoints = useCallback((points: { index: number; x: number; y: number }[]) => {
-    projectedPointsRef.current = points
+  const handleComputeProjection = useCallback((compute: () => { index: number; x: number; y: number }[]) => {
+    computeProjectionRef.current = compute
   }, [])
 
   const handleLassoComplete = useCallback(
@@ -189,13 +192,16 @@ export function PointCloudViewer({
         return
       }
       
-      // 记录搜索开始时间（从这里开始才是真正的搜索）
+      // 记录搜索开始时间
       const searchStartTime = performance.now()
+      
+      // 优化：只在套索完成时才进行一次投影计算
+      const projectedPoints = computeProjectionRef.current ? computeProjectionRef.current() : []
       
       // Find points inside the lasso polygon
       const selectedPoints: number[] = []
       
-      for (const point of projectedPointsRef.current) {
+      for (const point of projectedPoints) {
         if (isPointInPolygon(point, path)) {
           selectedPoints.push(point.index)
         }
@@ -218,8 +224,7 @@ export function PointCloudViewer({
           pointCloud={pointCloud}
           selectionMode={selectionMode}
           selectedIndices={selectedIndices}
-          lassoPath={lassoPath}
-          onProjectedPoints={handleProjectedPoints}
+          onComputeProjection={handleComputeProjection}
         />
       </Canvas>
 
