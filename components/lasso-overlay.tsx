@@ -6,11 +6,10 @@ import { useRef, useEffect, useState, useCallback } from "react"
 import type { LassoPoint } from "@/lib/types"
 
 interface LassoOverlayProps {
-  onPathUpdate: (path: LassoPoint[]) => void
   onComplete: (path: LassoPoint[]) => void
 }
 
-export function LassoOverlay({ onPathUpdate, onComplete }: LassoOverlayProps) {
+export function LassoOverlay({ onComplete }: LassoOverlayProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const [isDrawing, setIsDrawing] = useState(false)
   const pathRef = useRef<LassoPoint[]>([])
@@ -45,9 +44,8 @@ export function LassoOverlay({ onPathUpdate, onComplete }: LassoOverlayProps) {
     (e: React.MouseEvent) => {
       setIsDrawing(true)
       pathRef.current = [{ x: e.nativeEvent.offsetX, y: e.nativeEvent.offsetY }]
-      onPathUpdate(pathRef.current)
     },
-    [onPathUpdate],
+    [],
   )
 
   const handleMouseMove = useCallback(
@@ -57,10 +55,9 @@ export function LassoOverlay({ onPathUpdate, onComplete }: LassoOverlayProps) {
       const newPoint = { x: e.nativeEvent.offsetX, y: e.nativeEvent.offsetY }
       // 优化：直接 push 而不是创建新数组，避免每次 mousemove 都分配新内存
       pathRef.current.push(newPoint)
-      onPathUpdate(pathRef.current)
       draw()
     },
-    [isDrawing, onPathUpdate, draw],
+    [isDrawing, draw],
   )
 
   const handleMouseUp = useCallback(() => {

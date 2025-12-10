@@ -24,11 +24,16 @@ function PointCloudMesh({
   selectedIndices: Set<number>
 }) {
   const pointsRef = useRef<THREE.Points>(null)
+  // 🚀 记录上一次的 positions 引用，用于判断是否需要重新计算边界球
+  const lastPositionsRef = useRef<Float32Array | null>(null)
 
   useEffect(() => {
     if (!pointsRef.current) return
 
     const geometry = pointsRef.current.geometry
+    
+    // 🚀 判断位置数据是否变化（只有位置变化才需要重新计算边界球）
+    const positionsChanged = lastPositionsRef.current !== pointCloud.positions
     
     // 如果有选中的点，只渲染选中的部分
     if (selectedIndices.size > 0) {
@@ -53,6 +58,9 @@ function PointCloudMesh({
       
       geometry.setAttribute("position", new THREE.BufferAttribute(new Float32Array(selectedPositions), 3))
       geometry.setAttribute("color", new THREE.BufferAttribute(new Float32Array(selectedColors), 3))
+      
+      // 选中子集时总是需要计算边界球（因为是新的小数组，开销很小）
+      geometry.computeBoundingSphere()
     } else {
       // 没有选中时，渲染所有点
       // 🚀 优化：直接使用原数组，不创建新的 TypedArray
@@ -79,13 +87,18 @@ function PointCloudMesh({
         positions.set(pointCloud.positions)
         colors.set(pointCloud.colors)
         
+        
         // 标记需要更新
         positionAttr.needsUpdate = true
         colorAttr.needsUpdate = true
       }
+      
+      // 🚀 只在位置数据变化时才重新计算边界球（上色只改颜色，不需要重算）
+      if (positionsChanged) {
+        geometry.computeBoundingSphere()
+        lastPositionsRef.current = pointCloud.positions
+      }
     }
-    
-    geometry.computeBoundingSphere() //设置边界球，用于相机定位和渲染优化
   }, [pointCloud, selectedIndices])
 
   return (
@@ -166,6 +179,7 @@ function SceneContent({
 }) {
   const { camera, gl } = useThree()
 
+
   // 将相机矩阵与视口信息提供给主线程，供 Worker 投影使用
   useEffect(() => {
     const compute = () => {
@@ -214,7 +228,6 @@ export function PointCloudViewer({
 
   const handleLassoComplete = useCallback(
     async (path: LassoPoint[]) => {
-      setLassoPath([])
 
       if (path.length < 3) {
         return
@@ -253,7 +266,7 @@ export function PointCloudViewer({
       </Canvas>
 
       {selectionMode === "lasso" && (
-        <LassoOverlay onPathUpdate={setLassoPath} onComplete={handleLassoComplete} />
+        <LassoOverlay  onComplete={handleLassoComplete} />
       )}
     </div>
   )

@@ -65,34 +65,31 @@ export default function Home() {
   }, [])
 
   const handleColorSelection = useCallback(
-    async (color: string) => {
-      if (!pointCloud || selectedIndices.size === 0 || !workerRef.current) return
+    (color: string) => {
+      if (!pointCloud || selectedIndices.size === 0) return
+
+      const start = performance.now()
 
       const hex = color.replace("#", "")
       const r = Number.parseInt(hex.substring(0, 2), 16) / 255
       const g = Number.parseInt(hex.substring(2, 4), 16) / 255
       const b = Number.parseInt(hex.substring(4, 6), 16) / 255
 
-      const indicesArray = new Uint32Array(selectedIndices.size)
-      let offset = 0
+      // 直接在主线程修改颜色数组
+      const colors = pointCloud.colors
       selectedIndices.forEach((index) => {
-        indicesArray[offset++] = index
+        const base = index * 3
+        colors[base] = r
+        colors[base + 1] = g
+        colors[base + 2] = b
       })
 
-      try {
-        const { colors, coloringTime } = await workerRef.current.color({
-          indices: indicesArray,
-          color: [r, g, b],
-        })
+      const coloringTime = performance.now() - start
 
-        setPointCloud({ ...pointCloud, colors })
-        setLastColoringTime(coloringTime)
-        setSelectedIndices(new Set())
-
-
-      } catch (error) {
-        console.error("Worker 上色失败", error)
-      }
+      // 创建新的 pointCloud 对象触发 React 更新，但复用同一个 colors 数组
+      setPointCloud({ ...pointCloud, colors })
+      setLastColoringTime(coloringTime)
+      setSelectedIndices(new Set())
     },
     [pointCloud, selectedIndices],
   )
