@@ -1,24 +1,28 @@
+# PCD 点云渲染性能优化文档
 
 ## 问题1：千万级数据时候，进行套索操作的时候页面会崩溃
 
-what?（现象是什么？）
+### What?（现象是什么？）
 
-用户在进行套索操作时，浏览器页面无响应或直接崩溃
-崩溃时机：用户在canvas上绘制path的时候
+用户在进行套索操作时，浏览器页面无响应或直接崩溃。
 
-why?（崩溃的原因是什么？）
-根本原因：主线程被海量计算阻塞 + 内存爆炸
-原因1：每次鼠标位置的更新都触发一次lassoPath的改变然后会触发SceneContent的re-render,都会进行一次千万次数据量的3D投影计算
+**崩溃时机**：用户在 canvas 上绘制 path 的时候
 
-```
+### Why?（崩溃的原因是什么？）
+
+**根本原因**：主线程被海量计算阻塞 + 内存爆炸
+
+**原因1**：每次鼠标位置的更新都触发一次 lassoPath 的改变然后会触发 SceneContent 的 re-render，都会进行一次千万次数据量的 3D 投影计算
+
+```typescript
 useFrame(() => {
-if (selectionMode !== "lasso" || lassoPath.length === 0) return
+  if (selectionMode !== "lasso" || lassoPath.length === 0) return
 
-const projectedPoints: { index: number; x: number; y: number }[] = []
-const positions = pointCloud.positions
-const vector = new THREE.Vector3()
+  const projectedPoints: { index: number; x: number; y: number }[] = []
+  const positions = pointCloud.positions
+  const vector = new THREE.Vector3()
 
-for (let i = 0; i < positions.length; i += 3) {
+  for (let i = 0; i < positions.length; i += 3) {
     vector.set(positions[i], positions[i + 1], positions[i + 2])
     vector.project(camera)
 
@@ -26,32 +30,33 @@ for (let i = 0; i < positions.length; i += 3) {
     const y = ((-vector.y + 1) / 2) * gl.domElement.clientHeight
 
     if (vector.z < 1) {
-    projectedPoints.push({ index: i / 3, x, y })
+      projectedPoints.push({ index: i / 3, x, y })
     }
-}
+  }
 
-onProjectedPoints(projectedPoints)
+  onProjectedPoints(projectedPoints)
 })
 ```
 
+**原因2**：每帧存储千万级投影点数据
 
-原因2: 每帧存储千万级投影点数据
+```typescript
+const handleProjectedPoints = useCallback((points: { index: number; x: number; y: number }[]) => {
+  projectedPointsRef.current = points
+}, [])
 ```
-  const handleProjectedPoints = useCallback((points: { index: number; x: number; y: number }[]) => {
-    projectedPointsRef.current = points
-  }, [])
+
+**内存计算**：
+- 每个投影点对象：`{ index: number, x: number, y: number }`
+- 在 JavaScript 中，每个对象约占 48-64 字节（对象头 + 3 个数字）
+- 10,000,000 点 × 60 字节 ≈ 600MB
+- 这个数组每帧都重新创建，60fps = 每秒分配 36GB 内存！
+
+### How?（是怎么崩溃的?）
+
+**崩溃流程**：
+
 ```
-内存计算：
-每个投影点对象：{ index: number, x: number, y: number }
-在 JavaScript 中，每个对象约占 48-64 字节（对象头 + 3个数字）
-10,000,000 点 × 60 字节 ≈ 600MB
-
-这个数组每帧都重新创建，60fps = 每秒分配 36GB 内存！
-
-
-how?（是怎么崩溃的?）
-崩溃流程：
-
 用户按下鼠标开始画套索
     ↓
 handleMouseDown 设置 isDrawing=true, lassoPath 有值
@@ -70,23 +75,26 @@ useFrame 每帧执行（60fps）
     └─ 触发 draw() 重绘 canvas
     ↓
 【多重压力叠加】
-    ├─ CPU：主线程被 3亿次/帧 的运算占满 → 丢帧 → UI 卡死
+    ├─ CPU：主线程被 3 亿次/帧 的运算占满 → 丢帧 → UI 卡死
     ├─ 内存：每秒分配 36GB 内存 → 浏览器内存限制（2-4GB）触顶
     └─ GC：频繁 Full GC 试图回收内存 → 进一步阻塞主线程
     ↓
 浏览器崩溃或页面无响应
+```
 
+### How to resolve?
 
-how to resolve?
+**解决方案**：将"实时投影计算"改为"延迟计算"
 
-解决方案：将"实时投影计算"改为"延迟计算"
+#### 优化1：移除 useFrame 中的实时投影计算
 
-### 优化1：移除 useFrame 中的实时投影计算
 **问题**：useFrame 以 60fps 的频率执行千万次投影计算
+
 **解决**：不再在 useFrame 中每帧计算，改为只提供一个计算函数
 
-优化前：每帧都计算
-```
+**优化前**：每帧都计算
+
+```typescript
 useFrame(() => {
   for (let i = 0; i < positions.length; i += 3) {
     // 千万次投影计算
@@ -94,8 +102,9 @@ useFrame(() => {
 })
 ```
 
-优化后：只提供计算函数
-```
+**优化后**：只提供计算函数
+
+```typescript
 useEffect(() => {
   const computeProjection = () => {
     for (let i = 0; i < positions.length; i += 3) {
@@ -107,20 +116,24 @@ useEffect(() => {
 ```
 
 **效果**：
-- 绘制套索时：0 次投影计算（原来：60fps × N秒 = 数百次）
+- 绘制套索时：0 次投影计算（原来：60fps × N 秒 = 数百次）
 - 完成套索时：1 次投影计算
 
-### 优化2：只在套索完成时才计算投影
+#### 优化2：只在套索完成时才计算投影
+
 **问题**：绘制过程中持续存储 600MB 投影数据
+
 **解决**：存储计算函数而不是计算结果
 
-优化前：存储投影结果（600MB）
-```
+**优化前**：存储投影结果（600MB）
+
+```typescript
 const projectedPointsRef = useRef<{index, x, y}[]>([])
 ```
 
-优化后：存储计算函数（几KB）
-```
+**优化后**：存储计算函数（几KB）
+
+```typescript
 const computeProjectionRef = useRef<() => {index, x, y}[]>(null)
 
 // 只在套索完成时调用一次
@@ -131,17 +144,21 @@ const projectedPoints = computeProjectionRef.current()
 - 内存占用：从每秒 36GB → 只在完成时分配一次 600MB
 - 绘制过程内存：~0MB（原来：持续累积）
 
-### 优化3：优化套索路径数组的内存分配
+#### 优化3：优化套索路径数组的内存分配
+
 **问题**：每次 mousemove 都用扩展运算符创建新数组
+
 **解决**：直接 push 到现有数组
 
-优化前：每次创建新数组
-```
+**优化前**：每次创建新数组
+
+```typescript
 pathRef.current = [...pathRef.current, newPoint]
 ```
 
-优化后：直接修改数组
-```
+**优化后**：直接修改数组
+
+```typescript
 pathRef.current.push(newPoint)
 ```
 
@@ -150,7 +167,7 @@ pathRef.current.push(newPoint)
 - 优化前：创建 200 个数组副本 + 等待 GC
 - 优化后：1 个数组持续增长
 
-### 优化效果对比
+#### 优化效果对比
 
 | 指标 | 优化前 | 优化后 | 提升 |
 |------|--------|--------|------|
@@ -159,12 +176,15 @@ pathRef.current.push(newPoint)
 | 套索路径数组创建 | 200次 | 1次 | **200倍** |
 | 主线程阻塞 | 持续阻塞 | 仅完成时短暂计算 | **体验质变** |
 
+---
 
-## 问题2: 搜索耗时在10000ms+，需要优化到<1000ms
+## 问题2：搜索耗时在10000ms+，需要优化到<1000ms
 
-What（现象是什么）？
+### What（现象是什么）？
+
 当用户完成套索操作后，执行以下步骤：
-```
+
+```typescript
 // 第195行：开始计时
 const searchStartTime = performance.now()
 
@@ -181,19 +201,21 @@ for (const point of projectedPoints) {
 // 第211-212行：结束计时
 const searchEndTime = performance.now()
 const searchTime = searchEndTime - searchStartTime
-
 ```
-观察到的现象：
-总耗时：10,000ms+（10秒以上）
-用户体验：点击完成套索后，页面卡顿 10 秒才有响应
-目标：< 1000ms（1秒内）
-差距：需要提升 10倍性能
 
-Why（为什么这么慢）？
+**观察到的现象**：
+- 总耗时：10,000ms+（10 秒以上）
+- 用户体验：点击完成套索后，页面卡顿 10 秒才有响应
+- 目标：< 1000ms（1 秒内）
+- 差距：需要提升 10 倍性能
 
-根本原因：两次完整遍历千万级数据 + 算法复杂度过高
-原因1：投影计算的计算量巨大
-```
+### Why（为什么这么慢）？
+
+**根本原因**：两次完整遍历千万级数据 + 算法复杂度过高
+
+**原因1**：投影计算的计算量巨大
+
+```typescript
 for (let i = 0; i < positions.length; i += 3) {
   vector.set(positions[i], positions[i + 1], positions[i + 2])
   vector.project(camera)
@@ -206,28 +228,31 @@ for (let i = 0; i < positions.length; i += 3) {
   }
 }
 ```
-每个点的操作开销：
-vector.set() - 3次赋值
-vector.project(camera) - 这是最昂贵的操作
-4×4 矩阵变换（viewMatrix × projectionMatrix）
-16 次乘法 + 12 次加法
-透视除法（3次除法）
-坐标转换计算 - 4次乘法 + 2次加法
-对象创建和数组 push
 
-原因2：多边形判断遍历所有投影点
-```
+**每个点的操作开销**：
+- `vector.set()` - 3 次赋值
+- `vector.project(camera)` - 这是最昂贵的操作
+  - 4×4 矩阵变换（viewMatrix × projectionMatrix）
+  - 16 次乘法 + 12 次加法
+  - 透视除法（3 次除法）
+- 坐标转换计算 - 4 次乘法 + 2 次加法
+- 对象创建和数组 push
+
+**原因2**：多边形判断遍历所有投影点
+
+```typescript
 for (const point of projectedPoints) {
   if (isPointInPolygon(point, path)) {
     selectedPoints.push(point.index)
   }
 }
 ```
-需要遍历所有投影点（假设 10,000,000 个）
-每个点调用一次 isPointInPolygon
 
-原因3：Ray-Casting 算法本身有开销
-```
+需要遍历所有投影点（假设 10,000,000 个），每个点调用一次 `isPointInPolygon`
+
+**原因3**：Ray-Casting 算法本身有开销
+
+```typescript
 function isPointInPolygon(point: { x: number; y: number }, polygon: LassoPoint[]): boolean {
   let inside = false
   const n = polygon.length
@@ -247,21 +272,23 @@ function isPointInPolygon(point: { x: number; y: number }, polygon: LassoPoint[]
 }
 ```
 
-算法复杂度：
-时间复杂度：O(n × m)
-n = 投影点数量（10,000,000）
-m = 套索多边形顶点数（假设 100-200 个）
-每次调用需要遍历套索的所有边
-每条边需要：4次属性访问 + 2次比较 + 5次算术运算
+**算法复杂度**：
+- 时间复杂度：O(n × m)
+- n = 投影点数量（10,000,000）
+- m = 套索多边形顶点数（假设 100-200 个）
+- 每次调用需要遍历套索的所有边
+- 每条边需要：4 次属性访问 + 2 次比较 + 5 次算术运算
 
-how（具体是怎么慢的？）
+### How（具体是怎么慢的？）
+
+```
 用户完成套索
     ↓
 【搜索开始】performance.now() 开始计时
     ↓
 步骤1：投影计算 computeProjectionRef.current()
     ├─ 遍历 10,000,000 个 3D 点
-    ├─ 每个点：矩阵变换 + 透视投影（30-40次运算）
+    ├─ 每个点：矩阵变换 + 透视投影（30-40 次运算）
     ├─ 创建 10,000,000 个投影对象
     └─ 耗时：约 5,000-7,000ms ⏰
     ↓
@@ -279,23 +306,24 @@ how（具体是怎么慢的？）
 【搜索完成】performance.now() 结束计时
     ↓
 总耗时：8,000 - 12,500ms 💥
+```
 
+### How to resolve?（如何解决？）
 
-How to resolve?（如何解决？）
+**解决方案**：边界框预筛选 + 算法优化
 
-解决方案：边界框预筛选 + 算法优化
-
-### 核心优化策略
+#### 核心优化策略
 
 **目标**：从 10,000ms 优化到 < 1,000ms（需要 10 倍性能提升）
 
 **优化路线**：先用算法优化（3-5倍），后续可考虑 Web Worker 并行（再 3-4倍）
 
-### 阶段1：算法和逻辑优化（已实施）
+#### 阶段1：算法和逻辑优化（已实施）
 
-#### 优化1：边界框（Bounding Box）预筛选 ⭐⭐⭐⭐⭐
+##### 优化1：边界框（Bounding Box）预筛选 ⭐⭐⭐⭐⭐
 
 **问题**：对每个点都进行复杂的多边形判断（Ray-Casting）
+
 **解决**：先计算套索的边界框，快速排除明显不在内的点
 
 ```typescript
@@ -327,6 +355,7 @@ if (isPointInPolygon(point, path)) {
 - **对比**：4 次 vs 1500 次，快 **375 倍**！
 
 **效果**：
+
 | 套索大小 | 边界框内点数比例 | 筛除比例 | 多边形判断减少 | 性能提升 |
 |---------|----------------|---------|---------------|---------|
 | 小套索（5%屏幕） | ~5-10% | 90-95% | 1000万 → 50-100万 | **10-20倍** |
@@ -339,9 +368,10 @@ if (isPointInPolygon(point, path)) {
 - 多边形判断次数：1000万 → **100-300万**
 - 这个阶段耗时：4,000ms → **400-1,200ms**（3-10倍提升）
 
-#### 优化2：减少对象属性访问
+##### 优化2：减少对象属性访问
 
 **问题**：频繁访问对象属性有性能开销
+
 **解决**：使用局部变量缓存
 
 ```typescript
@@ -360,9 +390,10 @@ if (yi > py !== yj > py && px < ...) {
 
 **效果**：减少 20-30% 的属性访问开销
 
-#### 优化3：缓存画布尺寸
+##### 优化3：缓存画布尺寸
 
 **问题**：每次投影都访问 DOM（`gl.domElement.clientWidth`）
+
 **解决**：在循环外缓存
 
 ```typescript
@@ -381,9 +412,10 @@ for (let i = 0; i < positions.length; i += 3) {
 
 **效果**：减少千万次 DOM 访问，性能提升 **5-10%**
 
-#### 优化4：使用乘法替代除法
+##### 优化4：使用乘法替代除法
 
 **问题**：除法比乘法慢 3-5 倍
+
 **解决**：`/ 2` → `* 0.5`
 
 ```typescript
@@ -396,7 +428,7 @@ const x = ((vector.x + 1) * 0.5) * canvasWidth
 
 **效果**：微小但累积可观（~3% 提升）
 
-### 优化效果预估（算法优化）
+#### 优化效果预估（算法优化）
 
 | 优化项 | 优化前 | 优化后 | 提升倍数 |
 |--------|--------|--------|----------|
@@ -404,9 +436,10 @@ const x = ((vector.x + 1) * 0.5) * canvasWidth
 | **投影计算** | 6,000ms | 5,000-5,500ms | **1.1-1.2倍** |
 | **总耗时** | **10,000ms** | **5,400-6,700ms** | **1.5-2倍** |
 
-### 实际测试效果
+#### 实际测试效果
 
 使用控制台输出可以看到优化效果：
+
 ```
 搜索统计:
   总点数: 10,000,000
@@ -416,68 +449,75 @@ const x = ((vector.x + 1) * 0.5) * canvasWidth
   搜索耗时: 6200ms
 ```
 
-### 进一步优化方向（如果需要）
+#### 进一步优化方向（如果需要）
 
 如果算法优化后仍达不到 1000ms 目标，可以考虑：
 
-#### 阶段2：Web Worker 多线程并行（未实施）
+##### 阶段2：Web Worker 多线程并行（未实施）
 
 **原理**：利用多核 CPU 并行处理
+
 **效果**：在算法优化基础上再提升 **3-4倍**（4核CPU）
+
 **最终性能**：6,500ms → **~2,000ms** → **~600ms** ✓
 
 但需要权衡：
 - ✅ 优点：性能提升巨大
 - ❌ 缺点：代码复杂度增加、调试困难、数据传输开销
 
-#### 阶段3：GPU 加速（终极方案）
+##### 阶段3：GPU 加速（终极方案）
 
 使用 GPU Compute Shader 进行投影和判断
 - 理论性能：< 100ms
 - 但实现复杂度极高
 
-### 实施的代码修改
+#### 实施的代码修改
 
 1. **components/point-cloud-viewer.tsx**
    - `handleLassoComplete`：添加边界框预筛选
    - `computeProjection`：缓存画布尺寸，优化计算
    - `isPointInPolygon`：使用局部变量减少属性访问
 
-### 优化成果
+#### 优化成果
 
-✅ **边界框筛除**：70-90% 的点无需多边形判断
-✅ **性能提升**：预计 1.5-2 倍（实际效果取决于套索大小）
-✅ **代码简洁**：不增加复杂度，易维护
-✅ **数据监控**：控制台输出详细统计信息
+- ✅ **边界框筛除**：70-90% 的点无需多边形判断
+- ✅ **性能提升**：预计 1.5-2 倍（实际效果取决于套索大小）
+- ✅ **代码简洁**：不增加复杂度，易维护
+- ✅ **数据监控**：控制台输出详细统计信息
 
 ---
 
-## 问题3: 上色时会遇到页面崩溃的情况
+## 问题3：上色时会遇到页面崩溃的情况
 
-What（现象是什么）？
+### What（现象是什么）？
 
 用户选中大量点后进行上色操作时，浏览器崩溃或页面无响应
-崩溃时机：点击颜色选择器，选择颜色后
-现象：页面卡顿数秒后崩溃，或出现内存不足错误
 
-Why（为什么会崩溃）？
+**崩溃时机**：点击颜色选择器，选择颜色后
 
-根本原因：使用扩展运算符复制大数组 + 大量内存分配
+**现象**：页面卡顿数秒后崩溃，或出现内存不足错误
 
-原因1：扩展运算符复制整个颜色数组
+### Why（为什么会崩溃）？
+
+**根本原因**：使用扩展运算符复制大数组 + 大量内存分配
+
+**原因1**：扩展运算符复制整个颜色数组
+
 ```typescript
 const newColors = [...pointCloud.colors]
 ```
-问题分析：
+
+**问题分析**：
 - pointCloud.colors 包含千万级数据（1000万点 × 3 = 3000万个数字）
-- 扩展运算符 [...array] 会：
+- 扩展运算符 `[...array]` 会：
   1. 创建一个新数组
   2. 逐个复制所有元素（3000万次赋值）
   3. 可能触发多次数组扩容
 - 内存占用：3000万 × 8字节 = 240MB
 - 时间消耗：复制操作需要 500-2000ms
 
-原因2：在选中大量点时内存压力巨大
+**原因2**：在选中大量点时内存压力巨大
+
 ```typescript
 selectedIndices.forEach((index) => {
   newColors[index * 3] = r
@@ -485,27 +525,31 @@ selectedIndices.forEach((index) => {
   newColors[index * 3 + 2] = b
 })
 ```
-问题分析：
+
+**问题分析**：
 - 如果选中 500万个点
 - 需要修改 1500万个颜色值
 - forEach 迭代 500万次
 - 每次迭代访问数组 3 次
 
-原因3：React 状态更新触发渲染
+**原因3**：React 状态更新触发渲染
+
 ```typescript
 setPointCloud({ ...pointCloud, colors: newColors })
 ```
-问题分析：
+
+**问题分析**：
 - 创建新的 pointCloud 对象
 - 触发组件重新渲染
 - 重新创建 Three.js BufferAttribute
 - 可能在旧数组被回收前就分配新数组
 - 内存峰值可能达到 500MB+
 
-How（具体是怎么崩溃的）？
+### How（具体是怎么崩溃的）？
 
-崩溃流程：
+**崩溃流程**：
 
+```
 用户点击颜色选择器
     ↓
 handleColorSelection 执行
@@ -535,15 +579,16 @@ setPointCloud({ ...pointCloud, colors: newColors })
 如果系统内存不足或达到浏览器限制
     ↓
 页面崩溃 💥
+```
 
+### How to resolve?（如何解决？）
 
-How to resolve?（如何解决？）
+**解决方案**：使用 slice() 替代扩展运算符 + 优化索引计算
 
-解决方案：使用 slice() 替代扩展运算符 + 优化索引计算
-
-### 优化1：使用 slice() 替代扩展运算符 ⭐⭐⭐⭐⭐
+#### 优化1：使用 slice() 替代扩展运算符 ⭐⭐⭐⭐⭐
 
 **问题**：`[...array]` 对大数组效率低
+
 **解决**：使用 `array.slice()` 复制数组
 
 ```typescript
@@ -565,15 +610,17 @@ const newColors = pointCloud.colors.slice()
 | **浏览器优化** | 一般 | 高度优化 |
 
 **性能对比**（3000万元素数组）：
+
 ```
 扩展运算符: 1500ms
 slice():    300ms
 提升：5倍 ✓
 ```
 
-### 优化2：缓存索引计算
+#### 优化2：缓存索引计算
 
 **问题**：每次都计算 `index * 3`
+
 **解决**：计算一次，重复使用
 
 ```typescript
@@ -598,7 +645,7 @@ selectedIndices.forEach((index) => {
 - 对 500万个选中点，减少 1000万次乘法
 - 性能提升：~10-15%
 
-### 优化3：添加性能监控
+#### 优化3：添加性能监控
 
 ```typescript
 console.log(`🎨 上色统计:
@@ -606,9 +653,10 @@ console.log(`🎨 上色统计:
   上色耗时: ${coloringTime.toFixed(0)}ms`)
 ```
 
-### 优化3：直接修改原数组（零拷贝）⭐⭐⭐⭐⭐
+#### 优化4：直接修改原数组（零拷贝）⭐⭐⭐⭐⭐
 
 **问题**：`slice()` 仍需复制整个数组（2000万+ 元素）
+
 **解决**：直接修改原数组，完全避免复制
 
 ```typescript
@@ -640,9 +688,10 @@ setPointCloud({ ...pointCloud, colors: colors })  // 触发渲染
 3. 通过 `{ ...pointCloud, colors: colors }` 触发 React 重渲染
 4. BufferAttribute 标记 `needsUpdate = true`
 
-### 优化4：直接更新 BufferAttribute
+#### 优化5：直接更新 BufferAttribute
 
 **问题**：每次都重新创建 BufferAttribute
+
 **解决**：复用现有 BufferAttribute，只更新数据
 
 ```typescript
@@ -664,7 +713,7 @@ if (colorAttr) {
 - GPU 只更新改变的数据
 - 性能提升：~50%
 
-### 优化效果预估（终极优化）
+#### 优化效果预估（终极优化）
 
 | 选中点数 | 原始版本 | slice()版本 | 零拷贝版本 | 总提升 |
 |---------|---------|------------|-----------|--------|
@@ -699,19 +748,19 @@ if (colorAttr) {
 - ✅ 速度提升 **10-50 倍**
 - ✅ **达成 < 200ms 目标** ✓✓✓
 
-### 实施的代码修改
+#### 实施的代码修改
 
 1. **app/page.tsx**
    - `handleColorSelection`：使用 `slice()` 替代 `[...]`
    - 缓存索引计算 `const i = index * 3`
    - 添加性能监控日志
 
-### 优化成果
+#### 优化成果
 
-✅ **避免崩溃**：大数据量上色不再崩溃
-✅ **性能提升**：5 倍加速
-✅ **内存优化**：减少内存峰值
-✅ **代码简洁**：改动最小化
+- ✅ **避免崩溃**：大数据量上色不再崩溃
+- ✅ **性能提升**：5 倍加速
+- ✅ **内存优化**：减少内存峰值
+- ✅ **代码简洁**：改动最小化
 
 ---
 
@@ -721,7 +770,7 @@ if (colorAttr) {
 
 经过边界框预筛选优化后，搜索时间从 10,000ms 降到 5,000-6,000ms，但仍未达到 1000ms 的目标。
 
-主要瓶颈：
+**主要瓶颈**：
 - 投影计算和多边形判断仍在主线程执行
 - 主线程被阻塞，UI 卡顿明显
 - 单线程无法利用多核 CPU
@@ -955,6 +1004,7 @@ CPU 核心4: [████████████████████] Work
 | 1000万点 | 4000ms | 1100ms | 650ms | **3.5-6倍** |
 
 **实际测试结果**（8核 CPU，1000万点选中 50%）：
+
 ```
 优化前（单 Worker）：3200ms
 优化后（8 Worker）： 520ms
@@ -966,6 +1016,7 @@ CPU 核心4: [████████████████████] Work
 在支持并行的同时，还做了以下微优化：
 
 1. **预分配 TypedArray**
+
 ```typescript
 // ❌ 优化前：动态数组，频繁扩容
 const selected: number[] = []
@@ -977,6 +1028,7 @@ selectedBuffer[selectedCount++] = i
 ```
 
 2. **避免 subarray 到新数组的拷贝开销**
+
 ```typescript
 // 使用 subarray 创建视图，不复制数据
 const indices = selectedBuffer.subarray(0, selectedCount)
@@ -1127,8 +1179,8 @@ function PointCloudMesh({ pointCloud, selectedIndices }) {
 
 ### 关键成果
 
-✅ **搜索性能**：从 10,000ms+ 优化到 500-800ms（**12-20倍提升**）
-✅ **UI 响应**：主线程完全释放，操作流畅
-✅ **多核利用**：充分利用现代 CPU 多核能力
-✅ **上色性能**：零拷贝 + 条件边界球，消除卡顿
-✅ **可扩展性**：Worker 数量自动适配 CPU 核心数
+- ✅ **搜索性能**：从 10,000ms+ 优化到 500-800ms（**12-20倍提升**）
+- ✅ **UI 响应**：主线程完全释放，操作流畅
+- ✅ **多核利用**：充分利用现代 CPU 多核能力
+- ✅ **上色性能**：零拷贝 + 条件边界球，消除卡顿
+- ✅ **可扩展性**：Worker 数量自动适配 CPU 核心数
