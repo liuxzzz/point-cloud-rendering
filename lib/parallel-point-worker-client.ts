@@ -2,7 +2,7 @@ import type { LassoPoint, PointCloudData } from "./types"
 
 type Viewport = { width: number; height: number }
 
-type WorkerRequestType = "init" | "select" | "color"
+type WorkerRequestType = "init" | "parse" | "select" | "color"
 
 type SelectionPayload = {
   path: LassoPoint[]
@@ -14,6 +14,7 @@ type SelectionPayload = {
 
 type WorkerSuccessResponse =
   | { type: "init"; result: { count: number } }
+  | { type: "parse"; result: { data: PointCloudData } }
   | { type: "select"; result: { indices: Uint32Array; searchTime: number } }
   | { type: "color"; result: { colors: ArrayBuffer; coloringTime: number } }
 
@@ -104,6 +105,30 @@ export class ParallelPointWorkerClient {
       worker.terminate()
     }
     this.workers = []
+  }
+
+  /**
+   * 解析 PCD 文件（在单个 Worker 中执行）
+   * 由于解析本身已经是密集计算，使用单个 Worker 避免重复解析
+   */
+  async parse(arrayBuffer: ArrayBuffer): Promise<PointCloudData> {
+    // 只使用第一个 Worker 进行解析
+    const result = await this.workers[0].call("parse", { arrayBuffer }, [arrayBuffer])
+    
+    if (result.type !== "parse") {
+      throw new Error("Unexpected response type")
+    }
+
+    const data = result.result.data
+    this.pointCount = data.count
+
+    // 🔧 关键修复：解析完成后，同步数据到所有 Worker（包括第一个）
+    // 因为第一个 Worker 在 parse 时使用了 transfer，其内部数据已失效
+    // 必须重新 init 以确保所有 Worker 都有完整的数据副本
+    const syncPromises = this.workers.map((worker) => worker.call("init", data))
+    await Promise.all(syncPromises)
+
+    return data
   }
 
   /**

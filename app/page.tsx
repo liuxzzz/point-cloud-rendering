@@ -4,7 +4,6 @@ import { useState, useCallback, useEffect, useRef } from "react"
 import { PointCloudViewer } from "@/components/point-cloud-viewer"
 import { FileUploader } from "@/components/file-uploader"
 import { Toolbar } from "@/components/toolbar"
-import { parsePCD } from "@/lib/pcd-parser"
 import type { PointCloudData, SelectionMode } from "@/lib/types"
 import { ParallelPointWorkerClient } from "@/lib/parallel-point-worker-client"
 
@@ -35,13 +34,17 @@ export default function Home() {
     try {
       // 将文件转换为 ArrayBuffer（二进制数据）
       const arrayBuffer = await file.arrayBuffer()
-      const data = parsePCD(arrayBuffer)
+      
+      // 🔧 使用 Worker 在后台解析文件，避免阻塞主线程
+      // Worker 会使用 transfer 将数据发送回主线程（零拷贝），然后重新 init 所有 Worker
+      if (!workerRef.current) {
+        throw new Error("Worker 未初始化")
+      }
+      
+      const data = await workerRef.current.parse(arrayBuffer)
+      
       setPointCloud(data)
       setSelectedIndices(new Set())
-      // 同步数据到 Worker
-      workerRef.current?.init(data).catch((err) => {
-        console.error("初始化 Worker 失败", err)
-      })
     } catch (error) {
       console.error("Failed to parse PCD file:", error)
       alert("Failed to parse PCD file. Please ensure it's a valid PCD format.")
@@ -59,7 +62,7 @@ export default function Home() {
 
   const handleClearSelection = useCallback(() => {
     setSelectedIndices(new Set())
-    // 清除时间统计，还原到初始状态
+    // 清除时间统计，还原到初始状态（保留解析时间）
     setLastSearchTime(0)
     setLastColoringTime(0)
     // 切换回orbit模式
