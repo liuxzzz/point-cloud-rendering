@@ -1,72 +1,76 @@
-"use client"
+"use client";
 
-import { useRef, useEffect, useState, useCallback } from "react"
-import { Canvas, useThree } from "@react-three/fiber"
-import { OrbitControls } from "@react-three/drei"
-import * as THREE from "three"
-import type { PointCloudData, SelectionMode, LassoPoint } from "@/lib/types"
-import { LassoOverlay } from "./lasso-overlay"
-import { ParallelPointWorkerClient } from "@/lib/parallel-point-worker-client"
+import { useRef, useEffect, useState, useCallback } from "react";
+import { Canvas, useThree } from "@react-three/fiber";
+import { OrbitControls } from "@react-three/drei";
+import * as THREE from "three";
+import type { PointCloudData, SelectionMode, LassoPoint } from "@/lib/types";
+import { LassoOverlay } from "./lasso-overlay";
+import { ParallelPointWorkerClient } from "@/lib/parallel-point-worker-client";
 
 interface PointCloudViewerProps {
-  pointCloud: PointCloudData
-  selectionMode: SelectionMode
-  selectedIndices: Set<number>
-  onSelectionComplete: (indices: number[], searchTime: number) => void
-  workerClient?: ParallelPointWorkerClient | null
+  pointCloud: PointCloudData;
+  selectionMode: SelectionMode;
+  selectedIndices: Uint32Array;
+  onSelectionComplete: (indices: Uint32Array, searchTime: number) => void;
+  workerClient?: ParallelPointWorkerClient | null;
 }
 
 function PointCloudMesh({
   pointCloud,
   selectedIndices,
 }: {
-  pointCloud: PointCloudData
-  selectedIndices: Set<number>
+  pointCloud: PointCloudData;
+  selectedIndices: Uint32Array;
 }) {
-  const pointsRef = useRef<THREE.Points>(null)
+  const pointsRef = useRef<THREE.Points>(null);
   // 🚀 记录上一次的 positions 引用，用于判断是否需要重新计算边界球
-  const lastPositionsRef = useRef<Float32Array | null>(null)
+  const lastPositionsRef = useRef<Float32Array | null>(null);
 
   useEffect(() => {
-    if (!pointsRef.current) return
+    if (!pointsRef.current) return;
 
-    const geometry = pointsRef.current.geometry
-    
+    const geometry = pointsRef.current.geometry;
+
     // 🚀 判断位置数据是否变化（只有位置变化才需要重新计算边界球）
-    const positionsChanged = lastPositionsRef.current !== pointCloud.positions
-    
+    const positionsChanged = lastPositionsRef.current !== pointCloud.positions;
+
     // 如果有选中的点，只渲染选中的部分
-    if (selectedIndices.size > 0) {
-      const selectedPositions: number[] = []
-      const selectedColors: number[] = []
-      
-      selectedIndices.forEach((index) => {
-        const i = index * 3
+    if (selectedIndices.length > 0) {
+      const selectedPositions = new Float32Array(selectedIndices.length * 3);
+      const selectedColors = new Float32Array(selectedIndices.length * 3);
+
+      for (let j = 0; j < selectedIndices.length; j++) {
+        const index = selectedIndices[j];
+        const i = index * 3;
+        const outIdx = j * 3;
         // 获取该点的位置
-        selectedPositions.push(
-          pointCloud.positions[i],
-          pointCloud.positions[i + 1],
-          pointCloud.positions[i + 2]
-        )
+        selectedPositions[outIdx] = pointCloud.positions[i];
+        selectedPositions[outIdx + 1] = pointCloud.positions[i + 1];
+        selectedPositions[outIdx + 2] = pointCloud.positions[i + 2];
         // 获取该点的颜色
-        selectedColors.push(
-          pointCloud.colors[i],
-          pointCloud.colors[i + 1],
-          pointCloud.colors[i + 2]
-        )
-      })
-      
-      geometry.setAttribute("position", new THREE.BufferAttribute(new Float32Array(selectedPositions), 3))
-      geometry.setAttribute("color", new THREE.BufferAttribute(new Float32Array(selectedColors), 3))
-      
+        selectedColors[outIdx] = pointCloud.colors[i];
+        selectedColors[outIdx + 1] = pointCloud.colors[i + 1];
+        selectedColors[outIdx + 2] = pointCloud.colors[i + 2];
+      }
+
+      geometry.setAttribute(
+        "position",
+        new THREE.BufferAttribute(selectedPositions, 3)
+      );
+      geometry.setAttribute(
+        "color",
+        new THREE.BufferAttribute(selectedColors, 3)
+      );
+
       // 选中子集时总是需要计算边界球（因为是新的小数组，开销很小）
-      geometry.computeBoundingSphere()
+      geometry.computeBoundingSphere();
     } else {
       // 没有选中时，渲染所有点
       // 🚀 优化：直接使用原数组，不创建新的 TypedArray
-      const positionAttr = geometry.getAttribute("position")
-      const colorAttr = geometry.getAttribute("color")
-      
+      const positionAttr = geometry.getAttribute("position");
+      const colorAttr = geometry.getAttribute("color");
+
       if (
         !positionAttr ||
         !colorAttr ||
@@ -76,30 +80,35 @@ function PointCloudMesh({
         colorAttr.array !== pointCloud.colors
       ) {
         // 首次创建或大小改变 / 数据引用变化
-        geometry.setAttribute("position", new THREE.BufferAttribute(pointCloud.positions, 3))
-        geometry.setAttribute("color", new THREE.BufferAttribute(pointCloud.colors, 3))
+        geometry.setAttribute(
+          "position",
+          new THREE.BufferAttribute(pointCloud.positions, 3)
+        );
+        geometry.setAttribute(
+          "color",
+          new THREE.BufferAttribute(pointCloud.colors, 3)
+        );
       } else {
         // 🚀 直接更新现有 BufferAttribute，避免重新创建
-        const positions = positionAttr.array as Float32Array
-        const colors = colorAttr.array as Float32Array
-        
+        const positions = positionAttr.array as Float32Array;
+        const colors = colorAttr.array as Float32Array;
+
         // 复制数据到现有 buffer
-        positions.set(pointCloud.positions)
-        colors.set(pointCloud.colors)
-        
-        
+        positions.set(pointCloud.positions);
+        colors.set(pointCloud.colors);
+
         // 标记需要更新
-        positionAttr.needsUpdate = true
-        colorAttr.needsUpdate = true
+        positionAttr.needsUpdate = true;
+        colorAttr.needsUpdate = true;
       }
-      
+
       // 🚀 只在位置数据变化时才重新计算边界球（上色只改颜色，不需要重算）
       if (positionsChanged) {
-        geometry.computeBoundingSphere()
-        lastPositionsRef.current = pointCloud.positions
+        geometry.computeBoundingSphere();
+        lastPositionsRef.current = pointCloud.positions;
       }
     }
-  }, [pointCloud, selectedIndices])
+  }, [pointCloud, selectedIndices]);
 
   return (
     // 使用react-three-fiber 来代替传统Three.js的api，自动管理Three.js的实例生命周期，避免内存泄漏。
@@ -107,58 +116,65 @@ function PointCloudMesh({
       <bufferGeometry />
       <pointsMaterial size={0.02} vertexColors sizeAttenuation />
     </points>
-  )
+  );
 }
 
 function CameraController({
   pointCloud,
   selectionMode,
 }: {
-  pointCloud: PointCloudData
-  selectionMode: SelectionMode
+  pointCloud: PointCloudData;
+  selectionMode: SelectionMode;
 }) {
-  const { camera } = useThree()
-  const controlsRef = useRef<any>(null)
-  const initialized = useRef(false)
+  const { camera } = useThree();
+  const controlsRef = useRef<any>(null);
+  const initialized = useRef(false);
 
   useEffect(() => {
-    if (initialized.current) return
-    initialized.current = true
+    if (initialized.current) return;
+    initialized.current = true;
 
     // Calculate bounding box
-    const positions = pointCloud.positions
+    const positions = pointCloud.positions;
     let minX = Number.POSITIVE_INFINITY,
       minY = Number.POSITIVE_INFINITY,
-      minZ = Number.POSITIVE_INFINITY
+      minZ = Number.POSITIVE_INFINITY;
     let maxX = Number.NEGATIVE_INFINITY,
       maxY = Number.NEGATIVE_INFINITY,
-      maxZ = Number.NEGATIVE_INFINITY
+      maxZ = Number.NEGATIVE_INFINITY;
 
     for (let i = 0; i < positions.length; i += 3) {
-      minX = Math.min(minX, positions[i])
-      maxX = Math.max(maxX, positions[i])
-      minY = Math.min(minY, positions[i + 1])
-      maxY = Math.max(maxY, positions[i + 1])
-      minZ = Math.min(minZ, positions[i + 2])
-      maxZ = Math.max(maxZ, positions[i + 2])
+      minX = Math.min(minX, positions[i]);
+      maxX = Math.max(maxX, positions[i]);
+      minY = Math.min(minY, positions[i + 1]);
+      maxY = Math.max(maxY, positions[i + 1]);
+      minZ = Math.min(minZ, positions[i + 2]);
+      maxZ = Math.max(maxZ, positions[i + 2]);
     }
 
-    const centerX = (minX + maxX) / 2
-    const centerY = (minY + maxY) / 2
-    const centerZ = (minZ + maxZ) / 2
+    const centerX = (minX + maxX) / 2;
+    const centerY = (minY + maxY) / 2;
+    const centerZ = (minZ + maxZ) / 2;
 
-    const size = Math.max(maxX - minX, maxY - minY, maxZ - minZ)
+    const size = Math.max(maxX - minX, maxY - minY, maxZ - minZ);
 
-    camera.position.set(centerX + size, centerY + size, centerZ + size)
-    camera.lookAt(centerX, centerY, centerZ)
+    camera.position.set(centerX + size, centerY + size, centerZ + size);
+    camera.lookAt(centerX, centerY, centerZ);
 
     if (controlsRef.current) {
-      controlsRef.current.target.set(centerX, centerY, centerZ)
-      controlsRef.current.update()
+      controlsRef.current.target.set(centerX, centerY, centerZ);
+      controlsRef.current.update();
     }
-  }, [pointCloud, camera])
+  }, [pointCloud, camera]);
 
-  return <OrbitControls ref={controlsRef} enabled={selectionMode === "orbit"} enableDamping dampingFactor={0.05} />
+  return (
+    <OrbitControls
+      ref={controlsRef}
+      enabled={selectionMode === "orbit"}
+      enableDamping
+      dampingFactor={0.05}
+    />
+  );
 }
 
 function SceneContent({
@@ -167,43 +183,48 @@ function SceneContent({
   selectedIndices,
   onComputeProjection,
 }: {
-  pointCloud: PointCloudData
-  selectionMode: SelectionMode
-  selectedIndices: Set<number>
+  pointCloud: PointCloudData;
+  selectionMode: SelectionMode;
+  selectedIndices: Uint32Array;
   onComputeProjection: (
     compute: () => {
-      viewProjectionMatrix: Float32Array
-      viewport: { width: number; height: number }
-    },
-  ) => void
+      viewProjectionMatrix: Float32Array;
+      viewport: { width: number; height: number };
+    }
+  ) => void;
 }) {
-  const { camera, gl } = useThree()
-
+  const { camera, gl } = useThree();
 
   // 将相机矩阵与视口信息提供给主线程，供 Worker 投影使用
   useEffect(() => {
     const compute = () => {
-      const viewProjection = new THREE.Matrix4().multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse)
+      const viewProjection = new THREE.Matrix4().multiplyMatrices(
+        camera.projectionMatrix,
+        camera.matrixWorldInverse
+      );
       return {
         viewProjectionMatrix: new Float32Array(viewProjection.elements),
         viewport: {
           width: gl.domElement.clientWidth,
           height: gl.domElement.clientHeight,
         },
-      }
-    }
+      };
+    };
 
-    onComputeProjection(compute)
-  }, [camera, gl, onComputeProjection])
+    onComputeProjection(compute);
+  }, [camera, gl, onComputeProjection]);
 
   return (
     <>
       <ambientLight intensity={0.5} />
       <directionalLight position={[10, 10, 10]} intensity={1} />
-      <PointCloudMesh pointCloud={pointCloud} selectedIndices={selectedIndices} />
+      <PointCloudMesh
+        pointCloud={pointCloud}
+        selectedIndices={selectedIndices}
+      />
       <CameraController pointCloud={pointCloud} selectionMode={selectionMode} />
     </>
-  )
+  );
 }
 
 export function PointCloudViewer({
@@ -213,30 +234,40 @@ export function PointCloudViewer({
   onSelectionComplete,
   workerClient,
 }: PointCloudViewerProps) {
-  const [lassoPath, setLassoPath] = useState<LassoPoint[]>([])
+  const [lassoPath, setLassoPath] = useState<LassoPoint[]>([]);
   // 存储相机矩阵/视口计算函数，在套索完成时交由 Worker 使用
   const computeProjectionRef = useRef<
-    (() => { viewProjectionMatrix: Float32Array; viewport: { width: number; height: number } }) | null
-  >(null)
+    | (() => {
+        viewProjectionMatrix: Float32Array;
+        viewport: { width: number; height: number };
+      })
+    | null
+  >(null);
 
   const handleComputeProjection = useCallback(
-    (compute: () => { viewProjectionMatrix: Float32Array; viewport: { width: number; height: number } }) => {
-      computeProjectionRef.current = compute
+    (
+      compute: () => {
+        viewProjectionMatrix: Float32Array;
+        viewport: { width: number; height: number };
+      }
+    ) => {
+      computeProjectionRef.current = compute;
     },
-    [],
-  )
+    []
+  );
 
   const handleLassoComplete = useCallback(
     async (path: LassoPoint[]) => {
-
       if (path.length < 3) {
-        return
+        return;
       }
-      
-      const cameraInfo = computeProjectionRef.current ? computeProjectionRef.current() : null
+
+      const cameraInfo = computeProjectionRef.current
+        ? computeProjectionRef.current()
+        : null;
       if (!cameraInfo || !workerClient) {
-        console.warn("Worker 未准备好，跳过选点计算")
-        return
+        console.warn("Worker 未准备好，跳过选点计算");
+        return;
       }
 
       try {
@@ -244,19 +275,22 @@ export function PointCloudViewer({
           path,
           viewProjectionMatrix: cameraInfo.viewProjectionMatrix,
           viewport: cameraInfo.viewport,
-        })
+        });
 
-        onSelectionComplete(Array.from(indices), searchTime)
+        onSelectionComplete(indices, searchTime);
       } catch (error) {
-        console.error("套索选点 Worker 计算失败", error)
+        console.error("套索选点 Worker 计算失败", error);
       }
     },
-    [onSelectionComplete, workerClient],
-  )
+    [onSelectionComplete, workerClient]
+  );
 
   return (
     <div className="w-full h-full relative">
-      <Canvas camera={{ fov: 60, near: 0.01, far: 1000 }} style={{ background: "#1a1a2e" }}>
+      <Canvas
+        camera={{ fov: 60, near: 0.01, far: 1000 }}
+        style={{ background: "#1a1a2e" }}
+      >
         <SceneContent
           pointCloud={pointCloud}
           selectionMode={selectionMode}
@@ -266,9 +300,8 @@ export function PointCloudViewer({
       </Canvas>
 
       {selectionMode === "lasso" && (
-        <LassoOverlay  onComplete={handleLassoComplete} />
+        <LassoOverlay onComplete={handleLassoComplete} />
       )}
     </div>
-  )
+  );
 }
-
